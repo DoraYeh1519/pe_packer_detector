@@ -12,9 +12,9 @@ from idautils import Functions, Heads
 
 # ---- Plugin directories ----
 PLUGIN_DIR = os.path.dirname(__file__)
-SCRIPTS_DIR = os.path.join(PLUGIN_DIR, "scripts")
-MODELS_DIR = os.path.join(PLUGIN_DIR, "models")
-DATA_DIR = os.path.join(PLUGIN_DIR, "data")
+SCRIPTS_DIR = os.path.join(PLUGIN_DIR,"pe_packer_detector","scripts")
+MODELS_DIR = os.path.join(PLUGIN_DIR,"pe_packer_detector", "models")
+DATA_DIR = os.path.join(PLUGIN_DIR,"pe_packer_detector", "data")
 
 # ---- Dependency check ----
 def check_dependencies():
@@ -26,7 +26,7 @@ def check_dependencies():
         except ImportError:
             missing.append(pkg)
     if missing:
-        req = os.path.normpath(os.path.join(PLUGIN_DIR, "PEPD_requirements.txt")).replace("\\", "/")
+        req = os.path.normpath(os.path.join(PLUGIN_DIR, "pe_packer_detector", "PEPD_requirements.txt")).replace("\\", "/")
         idaapi.info(
             "PEPackerDetector missing dependencies:\n"
             f"  {', '.join(missing)}\n\n"
