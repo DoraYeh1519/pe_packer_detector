@@ -4,6 +4,7 @@
 
 * **IDA Pro** (version 7.4 or later) with IDAPython support
 * **Python Packages** (install via `requirements.txt`):
+
   * numpy
   * pandas
   * scikit-learn
@@ -44,5 +45,13 @@
 2. **Invoke the Plugin**
 
    * From the menu: **Edit → Plugins → PE Packer Detector**
-3. **View Results**
-   A popup will display whether the PE is likely packed along with a probability score.
+   * Or press the hotkey: **Ctrl+Shift-P**
+3. **View Packing Detection Results**
+   A popup window will display whether the PE is likely packed along with a probability score.
+4. **Interactive JMP Instruction List**
+   After the packing result appears, a non-modal **JMP Instruction List** window will open. This window lists all ordinary `jmp` instructions found in the binary, showing each instruction's address and disassembly. You can:
+
+   * **Click** or **press Enter** on any row to jump directly to that instruction in the disassembly view.
+   * Keep the window open to navigate multiple `jmp` locations without closing it.
+5. **Close the List**
+   Close the **JMP Instruction List** window by clicking the **X** or pressing **Esc** when you are done.
