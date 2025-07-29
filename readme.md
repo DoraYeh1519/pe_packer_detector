@@ -3,7 +3,7 @@
 ## Requirements
 
 * **IDA Pro** (version 7.4 or later) with IDAPython support
-* **Python Packages** (install via `PEPD_requirements.txt`):
+* **Python Packages** (install via `/pe_packer_detector/PEPD_requirements.txt`):
 
   * numpy
   * pandas
@@ -22,18 +22,19 @@
    ```text
    <IDA_INSTALL_DIR>/plugins/
      ├── pe_packer_detector.py
-     ├── scripts/
-     │    └── feature_extractor.py
-     ├── models/
-     │    └── rf_model_csv.joblib
-     └── PEPD_requirements.txt
+     └── pe_packer_detector/
+         ├──  scripts/
+         │    └── feature_extractor.py
+         ├──  models/
+         │    └── rf_model_csv.joblib
+         └── PEPD_requirements.txt
    ```
 
 3. **Install Dependencies**
    Open a command prompt and run:
 
    ```bat
-   > cd <IDA_INSTALL_DIR>/plugins/
+   > cd <IDA_INSTALL_DIR>/plugins/pe_packer_detector
    > python -m pip install -r PEPD_requirements.txt
    ```
 
@@ -41,7 +42,7 @@
 
 ## Usage
 
-1. **Launch IDA Pro** and open a PE file (`.exe` or `.dll`).
+1. **Launch IDA Pro** and open a PE file (`.exe`).
 2. **Invoke the Plugin**
 
    * From the menu: **Edit → Plugins → PE Packer Detector**
