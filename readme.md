@@ -3,7 +3,7 @@
 ## Requirements
 
 * **IDA Pro** (version 7.4 or later) with IDAPython support
-* **Python Packages** (install via `requirements.txt`):
+* **Python Packages** (install via `PEPD_requirements.txt`):
 
   * numpy
   * pandas
