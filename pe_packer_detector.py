@@ -128,7 +128,7 @@ class PEPackerDetector(idaapi.plugin_t):
 
         # Display result
         label = rev_label_map.get(pred, str(pred))
-        icon = "⚠️ Likely packed" if pred == label_map.get("packed", 1) else "✅ Likely clean"
+        icon = "✅ Likely clean" if pred == label_map.get("not-packed") else "⚠️ Likely packed"
         idaapi.info(f"{icon} {label} (Probability={prob:.2f})")
 
         # Enumerate all jmp instructions
