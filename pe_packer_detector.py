@@ -10,11 +10,11 @@ import json
 import ida_kernwin
 from idautils import Functions, Heads
 
-# ---- Plugin directories ----
+# ---- Plugin directories ----nPLUGIN_DIR = os.path.dirname(__file__)
 PLUGIN_DIR = os.path.dirname(__file__)
-SCRIPTS_DIR = os.path.join(PLUGIN_DIR,"pe_packer_detector","scripts")
-MODELS_DIR = os.path.join(PLUGIN_DIR,"pe_packer_detector", "models")
-DATA_DIR = os.path.join(PLUGIN_DIR,"pe_packer_detector", "data")
+SCRIPTS_DIR = os.path.join(PLUGIN_DIR, "pe_packer_detector", "scripts")
+MODELS_DIR = os.path.join(PLUGIN_DIR, "pe_packer_detector", "models")
+DATA_DIR = os.path.join(PLUGIN_DIR, "pe_packer_detector", "data")
 
 # ---- Dependency check ----
 def check_dependencies():
@@ -54,37 +54,78 @@ lm_path = os.path.join(DATA_DIR, "label_mapping.json")
 if os.path.isfile(lm_path):
     with open(lm_path, 'r') as f:
         label_map = json.load(f)
-# Reverse mapping: numeric label -> string label
 rev_label_map = {v: k for k, v in label_map.items()} if label_map else {0: "clean", 1: "packed"}
 
 # ---- JMP Instruction List Chooser ----
 class JmpChooser(ida_kernwin.Choose):
-    def __init__(self, addresses):
-        title = "JMP Instruction List"
-        # Define two columns: address and disassembly text
+    def __init__(self, jmps, dist_threshold):
         cols = [
-            ["Address", 12 | ida_kernwin.CHCOL_EA],
-            ["Disassembly", 48 | ida_kernwin.CHCOL_PLAIN],
+            ["Address",     12 | ida_kernwin.CHCOL_EA],
+            ["Target Addr", 12 | ida_kernwin.CHCOL_EA],
+            ["Distance",    12 | ida_kernwin.CHCOL_EA],
+            ["Disassembly", 36 | ida_kernwin.CHCOL_PLAIN],
         ]
-        # Non-modal chooser
-        super(JmpChooser, self).__init__(title, cols)
-        self.items = addresses
+        super(JmpChooser, self).__init__(
+            "JMP Instruction List",
+            cols,
+            flags=ida_kernwin.CH_ATTRS    # enable OnGetLineAttr
+        )
+
+        self.threshold = dist_threshold
+        # Sort jumps by numeric distance descending
+        self.items = sorted(
+            jmps,
+            key=lambda jt: abs(jt[1] - jt[0]) if jt[1] else 0,
+            reverse=True
+        )
 
     def OnGetSize(self):
         return len(self.items)
 
-    def OnGetLine(self, index):
-        ea = self.items[index]
-        return [f"0x{ea:X}", idaapi.generate_disasm_line(ea, 0)]
+    def OnGetLine(self, idx):
+        ea, target = self.items[idx]
+        disasm = idaapi.generate_disasm_line(ea, 0)
+        dist = abs(target - ea) if target else 0
+        dist_str = f"0x{dist:X}" if target else ""
+        return [
+            f"0x{ea:X}",
+            f"0x{target:X}" if target else "",
+            dist_str,
+            disasm
+        ]
 
-    def OnSelectLine(self, index):
-        # Jump to the selected address without closing the dialog
-        idaapi.jumpto(self.items[index])
+    def OnGetLineAttr(self, idx):
+        ea, target = self.items[idx]
+        # If no target, no highlight
+        if not target:
+            return None
+        dist = abs(target - ea)
+        # Cross-segment detection
+        seg_ea = idaapi.getseg(ea)
+        seg_t = idaapi.getseg(target)
+        if seg_ea and seg_t and seg_ea.start_ea != seg_t.start_ea:
+            # Cross-segment jumps: blue
+            return [0xCCCCFF, 0]
+        # Distance-based coloring
+        mid = self.threshold // 2
+        if dist > self.threshold:
+            # far jumps: red
+            return [0xFFCCCC, 0]
+        elif dist > mid:
+            # medium jumps: yellow
+            return [0xFFFFCC, 0]
+        else:
+            # near jumps: green
+            return [0xCCFFCC, 0]
+
+    def OnSelectLine(self, idx):
+        ea, target = self.items[idx]
+        idaapi.jumpto(target or ea)
         return False
 
 class PEPackerDetector(idaapi.plugin_t):
     flags = idaapi.PLUGIN_UNL
-    wanted_name = "PE Packer Detector"
+    wanted_name = "PE Packer Detector ST"
     wanted_hotkey = "Ctrl-Shift-P"
     comment = "Detect PE packers using a Random Forest model"
     help = "Dependencies required; see PEPD_requirements.txt"
@@ -104,20 +145,17 @@ class PEPackerDetector(idaapi.plugin_t):
             idaapi.info("Please open a PE file first.")
             return
 
-        # Extract features
         try:
             feats = PEFeatureExtractor(pe_path).extract_features()
         except Exception as e:
             idaapi.info(f"Feature extraction failed: {e}")
             return
 
-        # Filter numeric features
         num_feats = {k: v for k, v in feats.items() if isinstance(v, (int, float, bool))}
         if not num_feats:
             idaapi.info("No numeric features found; cannot predict.")
             return
 
-        # Prediction
         try:
             df = pd.DataFrame([num_feats])
             pred = self.model.predict(df)[0]
@@ -126,12 +164,11 @@ class PEPackerDetector(idaapi.plugin_t):
             idaapi.info(f"Prediction failed: {e}")
             return
 
-        # Display result
         label = rev_label_map.get(pred, str(pred))
-        icon = "✅ Likely clean" if pred == label_map.get("not-packed") else "⚠️ Likely packed"
+        icon = "✅ Likely clean\n" if pred == label_map.get("not-packed") else "⚠️ Likely packed\n"
         idaapi.info(f"{icon} {label} (Probability={prob:.2f})")
 
-        # Enumerate all jmp instructions
+        # Enumerate jumps
         jmp_addrs = []
         for func_ea in Functions():
             func = idaapi.get_func(func_ea)
@@ -142,10 +179,19 @@ class PEPackerDetector(idaapi.plugin_t):
                 if idaapi.decode_insn(insn, ea) > 0 and insn.itype == idaapi.NN_jmp:
                     jmp_addrs.append(ea)
 
-        # Show chooser
         if jmp_addrs:
-            chooser = JmpChooser(jmp_addrs)
-            chooser.Show()  # non-modal
+            jmps = [(ea, idc.get_operand_value(ea, 0)) for ea in jmp_addrs]
+            distances = sorted(abs(t - e) for e, t in jmps if t)
+            if distances:
+                idx = int(len(distances) * 0.95)
+                idx = min(idx, len(distances) - 1)
+                dyn_threshold = distances[idx]
+            else:
+                dyn_threshold = 0
+
+            idaapi.msg(f"[PEPackerDetector] 95th-percentile jump threshold = 0x{dyn_threshold:X}\n")
+            chooser = JmpChooser(jmps, dyn_threshold)
+            chooser.Show()
         else:
             idaapi.info("No ordinary jmp instructions found.")
 
