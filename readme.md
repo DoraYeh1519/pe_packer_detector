@@ -49,9 +49,14 @@
 3. **View Packing Detection Results**
    A popup window will display whether the PE is likely packed along with a probability score.
 4. **Interactive JMP Instruction List**
-   After the packing result appears, a non-modal **JMP Instruction List** window will open. This window lists all ordinary `jmp` instructions found in the binary, showing each instruction's address and disassembly. You can:
+   After the packing result appears, a non-modal **JMP Instruction List** window will open. This window lists all ordinary `jmp` instructions found in the binary, showing each instruction's address, target address, jump distance, and disassembly. You can:
 
    * **Click** or **press Enter** on any row to jump directly to that instruction in the disassembly view.
+   * **Sort** by any column (Address, Target Addr, Distance) — numeric columns sort by value, not lexicographically.
    * Keep the window open to navigate multiple `jmp` locations without closing it.
-5. **Close the List**
-   Close the **JMP Instruction List** window by clicking the **X** or pressing **Esc** when you are done.
+
+   **New color-coding**:
+   1. **Red** — cross-segment jumps (EA and target in different segments).  
+   2. **Purple** — “far” jumps (distance > 95th-percentile threshold).  
+   3. **Blue** — “medium” jumps (distance > 50% threshold but ≤ 95% threshold).  
+   4. **Green** — “near” jumps (distance ≤ 50% threshold).  
