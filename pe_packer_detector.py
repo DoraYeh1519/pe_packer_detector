@@ -157,16 +157,52 @@ class PEPackerDetector(idaapi.plugin_t):
             return
 
         try:
+            # 1) DataFrame 初始
             df = pd.DataFrame([num_feats])
-            pred = self.model.predict(df)[0]
-            prob = self.model.predict_proba(df)[0][pred]
+
+            # 2) 欄位對齊：只保留、補齊、排序
+            expected = list(self.model.feature_names_in_)
+            # 丟掉多餘
+            df = df[[c for c in df.columns if c in expected]]
+            # 補缺
+            for feat in expected:
+                if feat not in df.columns:
+                    df[feat] = 0
+            # 排序
+            df = df[expected]
+
+            # 3) 預測機率
+            probs = self.model.predict_proba(df)[0]
+            nonzero_probs = [
+                (rev_label_map.get(i, str(i)), float(p) * 100)
+                for i, p in enumerate(probs) if p > 0.001
+            ]
+            nonzero_probs.sort(key=lambda x: x[1], reverse=True)
+            nonzero_probs = nonzero_probs[:5]
+
         except Exception as e:
             idaapi.info(f"Prediction failed: {e}")
             return
 
-        label = rev_label_map.get(pred, str(pred))
-        icon = "✅ Likely clean\n" if pred == label_map.get("not-packed") else "⚠️ Likely packed\n"
-        idaapi.info(f"{icon} {label} (Probability={prob:.2f})")
+        # 4) 輸出成 WebApp 一樣的 result： 多行清單，並在最前面顯示 Likely Packed / Likely Clean
+        if nonzero_probs:
+            # 取出機率最高的類別名稱
+            top_name, top_score = nonzero_probs[0]
+            # 根據第一名是不是 "not-packed" 來決定訊息
+            if top_name.lower() != "not-packed":
+                header = "⚠️ Likely Packed"
+            else:
+                header = "✅ Likely Clean"
+            # 準備輸出
+            lines = [header, ""]
+            lines.append("Details:")
+            for idx, (name, score) in enumerate(nonzero_probs, start=1):
+                lines.append(f"{idx}. {name:<16} {score:.1f}%")
+            ida_kernwin.info("\n".join(lines))
+        else:
+            # 無法辨識時顯示英文訊息
+            ida_kernwin.info("❌ Unable to determine type\n")
+
 
         # Enumerate jumps
         jmp_addrs = []
