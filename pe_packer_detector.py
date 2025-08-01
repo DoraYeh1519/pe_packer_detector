@@ -1,239 +1,117 @@
-# File: pe_packer_detector.py
-# Place in <IDA install>/plugins/
-
-import idaapi
-import idc
-import os
-import sys
+# plugin.py
+import os, sys, pandas as pd, joblib
 import json
-
-import ida_kernwin
+import idaapi, ida_kernwin, idc
 from idautils import Functions, Heads
+import subprocess
+import tempfile
 
-# ---- Plugin directories ----nPLUGIN_DIR = os.path.dirname(__file__)
-PLUGIN_DIR = os.path.dirname(__file__)
-SCRIPTS_DIR = os.path.join(PLUGIN_DIR, "pe_packer_detector", "scripts")
-MODELS_DIR = os.path.join(PLUGIN_DIR, "pe_packer_detector", "models")
-DATA_DIR = os.path.join(PLUGIN_DIR, "pe_packer_detector", "data")
+# 把 scripts 目录加到 path
+HERE = os.path.join(os.path.dirname(__file__), "pe_packer_detector")                   # …/pe_packer_detector
+SCRIPTS = os.path.join(HERE, "scripts")
+if SCRIPTS not in sys.path:
+    sys.path.insert(0, SCRIPTS)
 
-# ---- Dependency check ----
-def check_dependencies():
-    required = ['pandas', 'joblib', 'numpy', 'sklearn', 'pefile']
-    missing = []
-    for pkg in required:
-        try:
-            __import__('sklearn' if pkg == 'sklearn' else pkg)
-        except ImportError:
-            missing.append(pkg)
-    if missing:
-        req = os.path.normpath(os.path.join(PLUGIN_DIR, "pe_packer_detector", "PEPD_requirements.txt")).replace("\\", "/")
-        idaapi.info(
-            "PEPackerDetector missing dependencies:\n"
-            f"  {', '.join(missing)}\n\n"
-            "Please install by running:\n"
-            f"  python -m pip install -r '{req}'\n"
-            "Then restart IDA Pro."
-        )
-    return not missing
-
-if not check_dependencies():
-    def PLUGIN_ENTRY():
-        return None
-    sys.exit(0)
-
-# ---- Additional imports ----
-import pandas as pd
-import joblib
-if SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, SCRIPTS_DIR)
 from feature_extractor import PEFeatureExtractor
+from gui import show_meme_gui
+from chooser import JmpChooser
 
-# ---- Load label map ----
-label_map = {}
-lm_path = os.path.join(DATA_DIR, "label_mapping.json")
-if os.path.isfile(lm_path):
-    with open(lm_path, 'r') as f:
-        label_map = json.load(f)
-rev_label_map = {v: k for k, v in label_map.items()} if label_map else {0: "clean", 1: "packed"}
+SUPPORTED_UNPACKERS = {"upx", "aspack", "mew", "mpress", "petite", "fsg"}  # 小写
 
-# ---- JMP Instruction List Chooser ----
-class JmpChooser(ida_kernwin.Choose):
-    def __init__(self, jmps, dist_threshold):
-        cols = [
-            ["Address",     12 | ida_kernwin.CHCOL_EA],
-            ["Target Addr", 12 | ida_kernwin.CHCOL_EA],
-            ["Distance",    12 | ida_kernwin.CHCOL_EA],
-            ["Disassembly", 36 | ida_kernwin.CHCOL_PLAIN],
-        ]
-        super(JmpChooser, self).__init__(
-            "JMP Instruction List",
-            cols,
-            flags=ida_kernwin.CH_ATTRS    # enable OnGetLineAttr
-        )
-
-        self.threshold = dist_threshold
-        # Sort jumps by numeric distance descending
-        self.items = sorted(
-            jmps,
-            key=lambda jt: abs(jt[1] - jt[0]) if jt[1] else 0,
-            reverse=True
-        )
-
-    def OnGetSize(self):
-        return len(self.items)
-
-    def OnGetLine(self, idx):
-        ea, target = self.items[idx]
-        disasm = idaapi.generate_disasm_line(ea, 0)
-        dist = abs(target - ea) if target else 0
-        dist_str = f"0x{dist:X}" if target else ""
-        return [
-            f"0x{ea:X}",
-            f"0x{target:X}" if target else "",
-            dist_str,
-            disasm
-        ]
-
-    def OnGetLineAttr(self, idx):
-        ea, target = self.items[idx]
-        # If no target, no highlight
-        if not target:
-            return None
-        dist = abs(target - ea)
-        # Cross-segment detection
-        seg_ea = idaapi.getseg(ea)
-        seg_t = idaapi.getseg(target)
-        if seg_ea and seg_t and seg_ea.start_ea != seg_t.start_ea:
-            # Cross-segment jumps: blue
-            return [0xCCCCFF, 0]
-        # Distance-based coloring
-        mid = self.threshold // 2
-        if dist > self.threshold:
-            # far jumps: red
-            return [0xFFCCCC, 0]
-        elif dist > mid:
-            # medium jumps: yellow
-            return [0xFFFFCC, 0]
-        else:
-            # near jumps: green
-            return [0xCCFFCC, 0]
-
-    def OnSelectLine(self, idx):
-        ea, target = self.items[idx]
-        idaapi.jumpto(target or ea)
-        return False
+# 载入模型、标签映射
+MODEL = joblib.load(os.path.join(HERE,"models","rf_model_csv.joblib"))
+with open(os.path.join(HERE,"data","label_mapping.json")) as f:
+    lm = json.load(f)
+rev_lm = {v:k for k,v in lm.items()}
 
 class PEPackerDetector(idaapi.plugin_t):
     flags = idaapi.PLUGIN_UNL
-    wanted_name = "PE Packer Detector ST"
-    wanted_hotkey = "Ctrl-Shift-P"
-    comment = "Detect PE packers using a Random Forest model"
-    help = "Dependencies required; see PEPD_requirements.txt"
-
+    wanted_name = "PE Packer Detector"
+    wanted_hotkey= "Ctrl-Shift-P"
     def init(self):
-        model_file = os.path.join(MODELS_DIR, "rf_model_csv.joblib")
-        if not os.path.isfile(model_file):
-            idaapi.msg(f"[PEPackerDetector] Model file not found: {model_file}\n")
-            return idaapi.PLUGIN_SKIP
-        self.model = joblib.load(model_file)
-        idaapi.msg("[PEPackerDetector] Model loaded successfully.\n")
         return idaapi.PLUGIN_OK
+    def run(self,arg):
+        path = idaapi.get_input_file_path()
+        feats = PEFeatureExtractor(path).extract_features()
+        df = pd.DataFrame([feats])[MODEL.feature_names_in_]
+        probs = MODEL.predict_proba(df)[0]
+        nz = sorted([(rev_lm[i],p*100) for i,p in enumerate(probs) if p>0.001], key=lambda x:-x[1])[:5]
 
-    def run(self, arg):
-        pe_path = idaapi.get_input_file_path()
-        if not pe_path or not os.path.isfile(pe_path):
-            idaapi.info("Please open a PE file first.")
-            return
+        show_meme_gui(path, nz)
+        
+        # 3. 如果 Top-1 支持，则询问是否解壳
+        top_label, top_score = nz[0]
+        if top_label.lower() in SUPPORTED_UNPACKERS:
+            yn = ida_kernwin.ask_yn(
+                ida_kernwin.ASKBTN_YES,
+                f"Top guess: {top_label} ({top_score:.1f}%)\n"
+                "This packer is supported. Unpack now?"
+            )
+            if yn == ida_kernwin.ASKBTN_YES:
+                # 在临时目录准备输出路径
+                tmpdir   = tempfile.mkdtemp(prefix="unpack_")
+                out_pe   = os.path.join(tmpdir, os.path.basename(path))
 
-        try:
-            feats = PEFeatureExtractor(pe_path).extract_features()
-        except Exception as e:
-            idaapi.info(f"Feature extraction failed: {e}")
-            return
+                # 调用 unpacker_script.py
+                unpacker_py = os.path.join(SCRIPTS, "unpacker_script.py")
+                cmd = [
+                    "python",
+                    unpacker_py,
+                    path,
+                    "-o", out_pe
+                ]
+                idaapi.msg(f"[*] Running unpacker: {' '.join(cmd)}\n")
+                try:
+                    subprocess.run(cmd, check=True)
+                except subprocess.CalledProcessError as e:
+                    ida_kernwin.info(f"Unpacking failed: {e}")
+                    return
 
-        num_feats = {k: v for k, v in feats.items() if isinstance(v, (int, float, bool))}
-        if not num_feats:
-            idaapi.info("No numeric features found; cannot predict.")
-            return
+                if os.path.isfile(out_pe):
+                    ida_kernwin.info(f"[+] Unpacked → {out_pe}\nPlease open it in IDA.")
+                else:
+                    ida_kernwin.info("[!] Unpacked file not found.")
+                return  # 结束，不做后续 JMP 分析
+            
+        # if nonzero_probs:
+        #     top_name, top_score = nonzero_probs[0]
+        #     header = "⚠️ Likely Packed" if top_name.lower() != "not-packed" else "✅ Likely Clean"
+        #     lines = [header, "", "Details:"]
+        #     for idx, (name, score) in enumerate(nonzero_probs, start=1):
+        #         lines.append(f"{idx}. {name:<16} {score:.1f}%")
+        #     ida_kernwin.info("\n".join(lines))
+        # else:
+        #     ida_kernwin.info("❌ Unable to determine type\n")
 
-        try:
-            # 1) DataFrame 初始
-            df = pd.DataFrame([num_feats])
+        # # 1) 收集所有函数里的 JMP 指令
+        # jmp_addrs = []
+        # for func_ea in Functions():
+        #     func = idaapi.get_func(func_ea)
+        #     if not func:
+        #         continue
+        #     for ea in Heads(func.start_ea, func.end_ea):
+        #         insn = idaapi.insn_t()
+        #         if idaapi.decode_insn(insn, ea) > 0 and insn.itype == idaapi.NN_jmp:
+        #             jmp_addrs.append(ea)
 
-            # 2) 欄位對齊：只保留、補齊、排序
-            expected = list(self.model.feature_names_in_)
-            # 丟掉多餘
-            df = df[[c for c in df.columns if c in expected]]
-            # 補缺
-            for feat in expected:
-                if feat not in df.columns:
-                    df[feat] = 0
-            # 排序
-            df = df[expected]
+        # # 2) 如果有 JMP，就计算阈值并弹出列表；否则提示无 JMP
+        # if jmp_addrs:
+        #     jmps = [(ea, idc.get_operand_value(ea, 0)) for ea in jmp_addrs]
+        #     distances = sorted(abs(t - e) for e, t in jmps if t)
+        #     # 取 95th-percentile
+        #     if distances:
+        #         idx = int(len(distances) * 0.95)
+        #         idx = min(idx, len(distances) - 1)
+        #         dyn_threshold = distances[idx]
+        #     else:
+        #         dyn_threshold = 0
 
-            # 3) 預測機率
-            probs = self.model.predict_proba(df)[0]
-            nonzero_probs = [
-                (rev_label_map.get(i, str(i)), float(p) * 100)
-                for i, p in enumerate(probs) if p > 0.001
-            ]
-            nonzero_probs.sort(key=lambda x: x[1], reverse=True)
-            nonzero_probs = nonzero_probs[:5]
+        #     idaapi.msg(f"[PEPackerDetector] 95th-percentile jump threshold = 0x{dyn_threshold:X}\n")
+        #     chooser = JmpChooser(jmps, dyn_threshold)
+        #     chooser.Show()
+        # else:
+        #     idaapi.info("No ordinary jmp instructions found.")
 
-        except Exception as e:
-            idaapi.info(f"Prediction failed: {e}")
-            return
+    def term(self): pass
 
-        # 4) 輸出成 WebApp 一樣的 result： 多行清單，並在最前面顯示 Likely Packed / Likely Clean
-        if nonzero_probs:
-            # 取出機率最高的類別名稱
-            top_name, top_score = nonzero_probs[0]
-            # 根據第一名是不是 "not-packed" 來決定訊息
-            if top_name.lower() != "not-packed":
-                header = "⚠️ Likely Packed"
-            else:
-                header = "✅ Likely Clean"
-            # 準備輸出
-            lines = [header, ""]
-            lines.append("Details:")
-            for idx, (name, score) in enumerate(nonzero_probs, start=1):
-                lines.append(f"{idx}. {name:<16} {score:.1f}%")
-            ida_kernwin.info("\n".join(lines))
-        else:
-            # 無法辨識時顯示英文訊息
-            ida_kernwin.info("❌ Unable to determine type\n")
-
-
-        # Enumerate jumps
-        jmp_addrs = []
-        for func_ea in Functions():
-            func = idaapi.get_func(func_ea)
-            if not func:
-                continue
-            for ea in Heads(func.start_ea, func.end_ea):
-                insn = idaapi.insn_t()
-                if idaapi.decode_insn(insn, ea) > 0 and insn.itype == idaapi.NN_jmp:
-                    jmp_addrs.append(ea)
-
-        if jmp_addrs:
-            jmps = [(ea, idc.get_operand_value(ea, 0)) for ea in jmp_addrs]
-            distances = sorted(abs(t - e) for e, t in jmps if t)
-            if distances:
-                idx = int(len(distances) * 0.95)
-                idx = min(idx, len(distances) - 1)
-                dyn_threshold = distances[idx]
-            else:
-                dyn_threshold = 0
-
-            idaapi.msg(f"[PEPackerDetector] 95th-percentile jump threshold = 0x{dyn_threshold:X}\n")
-            chooser = JmpChooser(jmps, dyn_threshold)
-            chooser.Show()
-        else:
-            idaapi.info("No ordinary jmp instructions found.")
-
-    def term(self):
-        pass
-
-
-def PLUGIN_ENTRY():
-    return PEPackerDetector()
+def PLUGIN_ENTRY(): return PEPackerDetector()
