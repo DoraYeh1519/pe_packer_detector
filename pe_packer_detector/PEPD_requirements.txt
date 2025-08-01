@@ -8,3 +8,4 @@ scikit-learn>=1.0.0
 pefile>=2022.5.30
 tqdm>=4.62.0
 unipacker>=1.0.8
+PyQt5>=5.15.7,<6           # GUI framework; PyQt5 5.15.7 is common on PyPI :contentReference[oaicite:5]{index=5}

@@ -1,5 +1,18 @@
 # PE Packer Detector IDA Plugin
 
+## Environments
+
+**Operating System**  
+- Windows 10 / Windows 11 (x64)
+
+**IDA Pro**  
+- Version 9.0 (validated)  
+- Should be compatible with 8.x series  
+- IDAPython enabled (portable or installed edition)
+
+**Python**  
+- Python 3.13.x (must match the version IDA uses)  
+
 ## Requirements
 
 * **IDA Pro** (version 7.4 or later) with IDAPython support
@@ -21,13 +34,20 @@
 
    ```text
    <IDA_INSTALL_DIR>/plugins/
-     ├── pe_packer_detector.py
-     └── pe_packer_detector/
-         ├──  scripts/
-         │    └── feature_extractor.py
-         ├──  models/
-         │    └── rf_model_csv.joblib
-         └── PEPD_requirements.txt
+   ├── pe_packer_detector.py
+   └── pe_packer_detector/                    
+      ├── scripts/                         
+      │   ├── feature_extractor.py
+      │   ├── gui.py                       
+      │   ├── chooser.py                    
+      │   └── unpacker_script.py            
+      ├── models/                           
+      │   └── rf_model_csv.joblib
+      ├── data/                            
+      │   └── label_mapping.json
+      ├── critical/                         
+      │   └── hahayoufoundme.jpg
+      └── PEPD_requirements.txt             
    ```
 
 3. **Install Dependencies**
@@ -47,9 +67,9 @@
 
    * From the menu: **Edit → Plugins → PE Packer Detector**
    * Or press the hotkey: **Ctrl+Shift-P**
-3. **View Packing Detection Results**
+3. **View Packing Detection Results**  
    A popup window will display whether the PE is likely packed along with a probability score.
-4. **Interactive JMP Instruction List**
+4. **Interactive JMP Instruction List**  
    After the packing result appears, a non-modal **JMP Instruction List** window will open. This window lists all ordinary `jmp` instructions found in the binary, showing each instruction's address, target address, jump distance, and disassembly. You can:
 
    * **Click** or **press Enter** on any row to jump directly to that instruction in the disassembly view.
@@ -61,3 +81,14 @@
    2. **Purple** — “far” jumps (distance > 95th-percentile threshold).  
    3. **Blue** — “medium” jumps (distance > 50% threshold but ≤ 95% threshold).  
    4. **Green** — “near” jumps (distance ≤ 50% threshold).  
+5. **Supported Unpackers**  
+This plugin leverages the open-source unipacker framework (MIT License) to perform static unpacking.  
+Special thanks to the [unipacker](https://github.com/unipacker/unipacker) .
+
+   Built-in packer support:
+   - UPX
+   - ASPack
+   - FSG
+   - MEW
+   - MPRESS
+
