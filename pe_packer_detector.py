@@ -16,7 +16,7 @@ from feature_extractor import PEFeatureExtractor
 from gui import show_meme_gui
 from chooser import JmpChooser
 
-SUPPORTED_UNPACKERS = {"upx", "aspack", "mew", "mpress", "petite", "fsg"}  # 小写
+SUPPORTED_UNPACKERS = {"upx", "aspack", "mew", "mpress", "fsg"}  # 小写
 
 # 载入模型、标签映射
 MODEL = joblib.load(os.path.join(HERE,"models","rf_model_csv.joblib"))
@@ -68,10 +68,44 @@ class PEPackerDetector(idaapi.plugin_t):
                     return
 
                 if os.path.isfile(out_pe):
+                    # 先顯示原本的訊息，等你按 OK
                     ida_kernwin.info(f"[+] Unpacked → {out_pe}\nPlease open it in IDA.")
+                    # 按完 OK 之後，立刻用 Explorer 打開該檔案所在的資料夾
+                    os.startfile(os.path.dirname(out_pe))
                 else:
                     ida_kernwin.info("[!] Unpacked file not found.")
-                return  # 结束，不做后续 JMP 分析
+
+                return  # 結束，不做後續 JMP 分析
+        
+        # 1) 收集所有函数里的 JMP 指令
+        jmp_addrs = []
+        for func_ea in Functions():
+            func = idaapi.get_func(func_ea)
+            if not func:
+                continue
+            for ea in Heads(func.start_ea, func.end_ea):
+                insn = idaapi.insn_t()
+                if idaapi.decode_insn(insn, ea) > 0 and insn.itype == idaapi.NN_jmp:
+                    jmp_addrs.append(ea)
+
+        # 2) 如果有 JMP，就计算阈值并弹出列表；否则提示无 JMP
+        if jmp_addrs:
+            jmps = [(ea, idc.get_operand_value(ea, 0)) for ea in jmp_addrs]
+            distances = sorted(abs(t - e) for e, t in jmps if t)
+            # 取 95th-percentile
+            if distances:
+                idx = int(len(distances) * 0.95)
+                idx = min(idx, len(distances) - 1)
+                dyn_threshold = distances[idx]
+            else:
+                dyn_threshold = 0
+
+            idaapi.msg(f"[PEPackerDetector] 95th-percentile jump threshold = 0x{dyn_threshold:X}\n")
+            chooser = JmpChooser(jmps, dyn_threshold)
+            chooser.Show()
+        else:
+            idaapi.info("No ordinary jmp instructions found.")
+
             
         # if nonzero_probs:
         #     top_name, top_score = nonzero_probs[0]
@@ -83,34 +117,7 @@ class PEPackerDetector(idaapi.plugin_t):
         # else:
         #     ida_kernwin.info("❌ Unable to determine type\n")
 
-        # # 1) 收集所有函数里的 JMP 指令
-        # jmp_addrs = []
-        # for func_ea in Functions():
-        #     func = idaapi.get_func(func_ea)
-        #     if not func:
-        #         continue
-        #     for ea in Heads(func.start_ea, func.end_ea):
-        #         insn = idaapi.insn_t()
-        #         if idaapi.decode_insn(insn, ea) > 0 and insn.itype == idaapi.NN_jmp:
-        #             jmp_addrs.append(ea)
 
-        # # 2) 如果有 JMP，就计算阈值并弹出列表；否则提示无 JMP
-        # if jmp_addrs:
-        #     jmps = [(ea, idc.get_operand_value(ea, 0)) for ea in jmp_addrs]
-        #     distances = sorted(abs(t - e) for e, t in jmps if t)
-        #     # 取 95th-percentile
-        #     if distances:
-        #         idx = int(len(distances) * 0.95)
-        #         idx = min(idx, len(distances) - 1)
-        #         dyn_threshold = distances[idx]
-        #     else:
-        #         dyn_threshold = 0
-
-        #     idaapi.msg(f"[PEPackerDetector] 95th-percentile jump threshold = 0x{dyn_threshold:X}\n")
-        #     chooser = JmpChooser(jmps, dyn_threshold)
-        #     chooser.Show()
-        # else:
-        #     idaapi.info("No ordinary jmp instructions found.")
 
     def term(self): pass
 
